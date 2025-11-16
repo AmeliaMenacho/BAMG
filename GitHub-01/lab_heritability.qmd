@@ -1,0 +1,253 @@
+---
+title: "Heredabilidad en el fitomejoramiento"
+author: "Flavio Lozano-Isla"
+format:
+  html:
+    toc: true
+    toc-location: left
+    number-sections: true
+    self-contained: true
+editor_options: 
+  chunk_output_type: console
+execute:
+  echo: false
+  warning: false
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+source("https://inkaverse.com/docs.r")
+knitr::opts_chunk$set(echo = T)
+
+cran <- c("inti"
+          , "metan"
+          , "psych"
+          , "FactoMineR"
+          , "openxlsx"
+          , "cowplot"
+          )
+
+suppressPackageStartupMessages({
+  for (pkgs in cran) { 
+    if( !require(pkgs, character.only = T) ) {
+      install.packages(pkgs)
+      library(pkgs, character.only = T)
+    } 
+  }
+remove(cran, pkgs)
+})
+```
+
+# Base de datos
+
+```{r}
+fb <- data_ge2
+# ?data_ge2
+
+fb %>% web_table()
+```
+
+- Revisar estructura de los datos
+
+```{r}
+#| eval: false
+
+str(fb)
+```
+
+- Estructura correcta, NO necesita transformación
+
+# Base de datos en excel
+
+```{r eval=FALSE}
+openxlsx::write.xlsx(x = fb, file = "met.xlsx")
+
+getwd()
+```
+
+> Directorio de trabajo `getwd()`
+
+# Correlación de variables
+
+```{r}
+# browseURL("https://wilkelab.org/cowplot/articles/mixing_plot_frameworks.html")
+
+png(filename = "correlation.png", width = 25, height = 25, units = "cm", res = 300)
+fb %>%
+  select(where(is.numeric))  %>% 
+  pairs.panels(hist.col="red"
+               , pch = 21
+               , method = "pearson"
+               , stars = T
+               , scale = T
+               , lm = T
+               ) 
+graphics.off()
+
+include_graphics("correlation.png")
+```
+
+- ¿Qué variables muestran correlaciones interesantes?
+
+# Análisis multivariado
+
+```{r}
+mv <- fb %>% 
+  group_by(GEN) %>% 
+  summarise(across(where(is.numeric)
+                   , ~ mean(.x, na.rm = TRUE))) %>%
+  column_to_rownames("GEN") %>% 
+  PCA(X = .
+      , scale.unit = T
+      , graph = F#se escala pq el que tiene mas magnitud va a parecer q da mas contribución
+          )
+```
+
+## Análisis de las variables
+
+```{r}
+plot1 <- plot.PCA(mv
+                , choix = "var")
+
+plot1
+```
+
+- ¿Qué variables estan correlacionadas?
+
+## Análisis de los individuos
+
+```{r}
+plot2 <- plot.PCA(mv
+         , choix = "ind"
+         , cex = 0.8
+         , shadowtext = T
+         , label = "ind"
+         , autoLab = "yes"
+         , graph.type = "ggplot"
+         )
+
+plot2
+```
+
+- ¿Cuáles de los híbridos tuvieron mejores rendimientos?
+
+```{r}
+list(plot1, plot2) %>% 
+  plot_grid(plotlist = .
+            , nrow = 1# cuando se hace analisis fenotipico se ponen estas 2 graficas
+            , labels = "AUTO"#kw peso de grano se va a la derecha y ese caso H1-h6 mejores, pero h6 tiene otras caracteristicas por el lugar en el cuadrante donde estan,
+            , rel_widths = c(1, 1.5)
+            )# para saber donde estan las agrupaciones
+```
+
+# Heredabilidad
+
+
+
+## Rendimiento
+
+```{r}
+hr <- H2cal(data = fb
+            , trait = "KW"
+            , gen.name = "GEN"
+            , rep.n = 3
+            , env.name = "ENV"
+            , env.n = 4
+            , fixed.model = "0 + (1|REP) + (1|ENV) + GEN"
+            , random.model = "1 + (1|REP) + (1|ENV) + (1|GEN)"
+            , emmeans = TRUE#
+            , plot_diag = TRUE
+            , outliers.rm = FALSE
+            )
+```
+
+### Componentes de la variancia
+
+```{r}
+hr$model %>% summary()#aquí sale lo de de la heredabilidad y así en este caso el dr
+#dijo que en la formula quedaba el efecto del genotipo y lo del error con sus tres factores
+
+hr$tabsmr %>% web_table()
+```
+
+### BLUPs
+
+```{r}
+hr$blups %>%
+  arrange(desc(KW)) %>% 
+  kable()
+```
+
+## Altura de planta
+
+```{r}
+hr <- H2cal(data = fb
+            , trait = "PH"
+            , gen.name = "GEN"
+            , rep.n = 3
+            , env.name = "ENV"
+            , env.n = 4
+            , fixed.model = "0 + (1|REP) + (1|ENV) + (1|ENV:GEN) + GEN"
+            , random.model = "1 + (1|REP) + (1|ENV) + (1|ENV:GEN) + (1|GEN)"
+            , emmeans = TRUE
+            , plot_diag = TRUE#si le quitamos interaccion del gen x ambi, el modelo mejora, se debe hacer una comparación de modelo, con la interaccion sin, normalmente
+            #un modelo más simple es mejor pq a veces hace que caiga la heredabilidad.
+            , outliers.rm = TRUE
+            )
+```
+
+### Componentes de la variancia
+
+```{r}
+hr$model %>% summary()
+
+hr$tabsmr %>% web_table()
+```
+
+### BLUPs
+
+```{r}
+hr$blups %>% 
+  arrange(desc(PH))
+  kable()
+```
+
+# Eficiencia de uso de agua en Papa
+
+```{r}
+#| eval: false
+
+browseURL("https://docs.google.com/spreadsheets/d/15r7ZwcZZHbEgltlF6gSFvCTFA-CFzVBWwg3mFlRyKPs/edit#gid=1263018298")
+```
+
+## Análisis interactivo
+
+```{r}
+#| eval: false
+
+inti::yupana(dependencies = T)
+```
+
+- Activar cuenta de google sheets
+- Datos en una hoja de Google sheets
+
+
+# Plot grid
+
+```{r}
+library(dplyr)
+library(cowplot)
+
+list(plot1, plot2) %>% 
+  plot_grid(plotlist = .
+            , nrow = 1
+            , labels = "AUTO"
+            , rel_widths = c(1, 1.6)
+            ) %>% 
+  ggsave2("figures/quantitative-genetics.png", plot = .
+          , width = 30, height = 12, units = "cm")
+```
+
+
