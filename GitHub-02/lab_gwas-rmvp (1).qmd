@@ -1,0 +1,225 @@
+---
+title: "Genome Wide Association Studies (GWAS)"
+author: "Flavio Lozano-Isla"
+format:
+  html:
+    toc: true
+    toc-location: left
+    number-sections: true
+    self-contained: true
+editor_options: 
+  chunk_output_type: console
+execute:
+  echo: false
+  warning: false
+---
+
+# Project Setup
+
+```{r}
+#| label:  setup
+
+source("https://inkaverse.com/docs.r")
+
+cran <- c("devtools", "tidyverse", "openxlsx", "rMVP", "CMplot")
+git <- c("hemstrow/snpR") 
+
+suppressPackageStartupMessages({
+  for (pkg in cran) { 
+    if( !require(pkg, character.only = TRUE) ) {
+      install.packages(pkg)
+      library(pkg, character.only = TRUE)
+    } 
+  }
+  
+  for (pkg in git) {
+    if( !require(sub(".*/", "", pkg), character.only = TRUE) ) {
+      devtools::install_github(pkg, upgrade = TRUE)
+      library(sub(".*/", "", pkg), character.only = TRUE)
+    }
+  }
+}); remove(cran, git, pkg)
+
+cat("Project: ", getwd(), "\n")
+cat("cores: ", parallel::detectCores())
+cores <- parallel::detectCores()*0.8
+session_info()
+```
+
+# Reference
+
+-   (article) https://www.nature.com/articles/ncomms1467
+-   (44K SNP set) http://www.ricediversity.org/data/
+-   (data) http://ricediversity.org/data/sets/44kgwas/
+-   https://github.com/hemstrow/snpR/blob/master/vignettes/snpR_introduction.Rmd
+-   https://doi.org/10.32614/CRAN.package.rMVP
+-   https://www.cog-genomics.org/plink/2.0/
+- https://www.nature.com/articles/s41576-024-00738-6
+
+# Tranformar datos
+
+```{bash}
+#| eval: false
+
+plink2 --ped RiceDiversity/sativas413.ped \
+       --map RiceDiversity/sativas413.map \
+       --export vcf \
+       --out RiceDiversity/sativas413
+```
+
+# Import data
+
+```{r}
+pheno <- read.xlsx("RiceDiversity/sativas413.xlsx")
+geno <- snpR::read_vcf("RiceDiversity/sativas413.vcf")
+
+info <- read.xlsx("RiceDiversity/sativas413info.xlsx") %>% 
+  select(id = "GSOR.ID", spop = "Sub-population") %>% 
+  tibble()
+
+sample_meta <- geno %>% 
+  names() %>% 
+  gsub("_.*", "", .) %>% 
+  enframe(value = "pop") %>% 
+  bind_cols(., info)
+
+sample.meta(geno)$spop <- sample_meta$spop
+
+sample.meta(geno)
+snp.meta(geno)
+```
+
+# PCA raw-data
+
+```{r}
+pca <- plot_clusters(geno
+                     , facets = "spop"
+                     , check_duplicates = T
+                     , plot_type = "pca"
+                     )
+
+pca$plots$pca
+```
+
+# rMVP: Memory-efficient, Visualization-enhanced, and Parallel-accelerated Genome-Wide Association Study
+
+## Import data
+
+```{r}
+sample_meta <- geno %>% 
+  names() %>% 
+  enframe(value = "Taxa") %>% 
+  mutate(HybID = gsub("_.*", "", Taxa)) %>% 
+  select(!name)
+  
+pheno <- read.xlsx("RiceDiversity/sativas413.xlsx") %>% 
+  base::merge(., sample_meta) %>% 
+  select(Taxa, everything()) %>% 
+  select(!HybID) %>% 
+  write_csv("RiceDiversity/mvp/sativas413.csv")
+
+MVP.Data(fileVCF = "RiceDiversity/sativas413.vcf"
+         , filePhe = "RiceDiversity/mvp/sativas413.csv"
+         , sep.phe = ","
+         , priority = "speed"
+         , fileKin = FALSE
+         , filePC = FALSE
+         , out = "RiceDiversity/mvp/gwas"
+         )
+```
+
+## Kinship
+
+```{r}
+MVP.Data.Kin(fileKin = TRUE
+             , mvp_prefix = 'RiceDiversity/mvp/gwas'
+             , out = 'RiceDiversity/mvp/gwas')
+```
+
+## Data input
+
+```{r}
+phenotype <- read.table("RiceDiversity/mvp/gwas.phe", head = TRUE)
+genotype <- attach.big.matrix("RiceDiversity/mvp/gwas.geno.desc")
+mapping <- read.table("RiceDiversity/mvp/gwas.geno.map", head = TRUE)
+kinship <- attach.big.matrix("RiceDiversity/mvp/gwas.kin.desc")
+```
+
+## GWAS
+
+```{r}
+phenotype %>% names()
+
+trait <- phenotype %>% 
+  select(1, "Seed.volume")
+
+imMVP <- MVP(
+  phe = trait
+  , geno = genotype
+  , map = mapping
+  , K = kinship
+  , method = c("GLM", "MLM", "FarmCPU")
+  , outpath = "RiceDiversity/mvp/gwas"
+  , file.output = TRUE
+  , file.type = "csv"
+  , ncpus = cores
+  )
+
+gc()
+```
+
+## SNP density-plot
+
+```{r}
+MVP.Report(MVP = imMVP
+           , plot.type="d"
+           , col=c("darkgreen", "yellow", "red")
+           , file.type = "jpg", dpi = 300
+           , outpath = "RiceDiversity/mvp/gwas"
+           )
+```
+
+## Phenotype distribution
+
+```{r}
+MVP.Hist(phe = trait
+         , outpath = "RiceDiversity/mvp/gwas"
+         , file.type = "jpg", breakNum = 18, dpi = 300)
+```
+
+## Manhatan
+
+```{r}
+MVP.Report(imMVP
+           , plot.type = "m"
+           , multracks = TRUE
+           , threshold = c(1e-6, 1e-4)
+           , threshold.lty=c(1,2)
+           , threshold.lwd=c(1,1)
+           , threshold.col=c("black","grey")
+           , amplify = TRUE
+           , bin.size = 1e6
+           , chr.den.col = c("darkgreen", "yellow", "red")
+           , signal.col = c("red","green")
+           , signal.cex = c(1,1)
+           , file.type = "jpg", memo = "", dpi = 300
+           , outpath = "RiceDiversity/mvp/gwas"
+        )
+```
+
+## Q-Q plot
+
+```{r}
+MVP.Report(imMVP
+           , plot.type = "q"
+           , col = c("dodgerblue1", "olivedrab3", "darkgoldenrod1")
+           , threshold = 1e6
+           , signal.pch = 19
+           , signal.cex = 1.5
+           , signal.col = "red"
+           , box = FALSE 
+           , multracks = TRUE
+           , file.type="jpg",memo="",dpi=300
+           , outpath = "RiceDiversity/mvp/gwas"
+           )
+```
